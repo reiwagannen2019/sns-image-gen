@@ -7,24 +7,24 @@ export async function POST(req: Request) {
     const API_KEY = process.env.GOOGLE_AI_API_KEY;
 
     if (!API_KEY) {
-      return NextResponse.json({ success: false, error: "Vercelの環境変数が設定されていません" }, { status: 500 });
+      return NextResponse.json({ success: false, error: "APIキーが設定されていません。" }, { status: 500 });
     }
 
-    // 1. Gemini 2.0 Flashでプロンプトを拡張
+    // 1. Gemini 2.0 Flashでエモい英文プロンプトを作成[cite: 1]
     const genAI = new GoogleGenerativeAI(API_KEY);
     const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
     const expansionPrompt = `
-      以下の日本語の思い出を、Imagen 3で生成するための詳細な英文プロンプトに変換してください。
-      思い出：${prompt}
-      条件：日本のアニメ映画スタイル、エモーショナルな光の表現、8k。
-      出力：英文プロンプトのみを出力。
+      Input: ${prompt}
+      Task: Create a highly detailed English image generation prompt for Imagen 3.
+      Style: Nostalgic Japanese anime style, soft cinematic lighting, emotional atmosphere.
+      Output: Only the English prompt text.
     `;
 
     const result = await model.generateContent(expansionPrompt);
     const expandedPrompt = result.response.text().trim();
 
-    // 2. Imagen 3 APIを叩く
+    // 2. Imagen 3 APIを呼び出し
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/imagen-3:predict?key=${API_KEY}`,
       {
@@ -42,26 +42,16 @@ export async function POST(req: Request) {
 
     const data = await response.json();
 
-    // エラーチェックを厳密にします
-    if (data.error) {
-      return NextResponse.json({ success: false, error: `Google APIエラー: ${data.error.message}` });
-    }
-
-    // データの存在確認を安全に行います
-    const base64Image = data?.predictions?.[0]?.bytesBase64Encoded;
-
-    if (base64Image) {
+    // 3. データの存在を一段ずつ慎重に確認（これで '0' のエラーを防ぎます）
+    if (data && data.predictions && data.predictions[0] && data.predictions[0].bytesBase64Encoded) {
       return NextResponse.json({
         success: true,
-        imageUrl: `data:image/png;base64,${base64Image}`,
+        imageUrl: `data:image/png;base64,${data.predictions[0].bytesBase64Encoded}`,
       });
     } else {
-      // レスポンスの構造が違う場合に備えて、中身をログに出力（VercelのLogsで確認可能）
-      console.error("Unexpected API Response:", JSON.stringify(data));
-      return NextResponse.json({ 
-        success: false, 
-        error: "画像の生成に成功しましたが、データの取得に失敗しました。APIの制限を確認してください。" 
-      });
+      // 失敗した理由を詳しく画面に返す
+      const errorMessage = data.error?.message || "画像データが返ってきませんでした。モデルの権限設定を確認してください。";
+      return NextResponse.json({ success: false, error: errorMessage });
     }
   } catch (error: any) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
