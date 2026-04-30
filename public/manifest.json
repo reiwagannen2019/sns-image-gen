@@ -1,0 +1,17 @@
+{
+  "name": "SNS IMAGE GEN",
+  "short_name": "ImageGen",
+  "description": "SNS向けAI画像生成ツール",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#4f46e5",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/3659/3659899.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
