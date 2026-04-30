@@ -10,21 +10,14 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, error: "APIキーが設定されていません。" }, { status: 500 });
     }
 
-    // 1. Gemini 3 Flash によるプロンプトの最適化
+    // 1. プロンプト拡張 (ここは無料枠でも動くはずです)
     const genAI = new GoogleGenerativeAI(API_KEY);
-    // Gemini 3 Flash を指定
     const model = genAI.getGenerativeModel({ model: "gemini-3-flash" });
 
-    const expansionPrompt = `
-      あなたはプロの画像生成エンジニアです。
-      「${prompt}」という思い出を、1990年代の日本のアニメ映画（エモーショナルな光、ノスタルジックな風景）風に再現するための詳細な英文プロンプトを1つ作成してください。
-      出力は英文プロンプトのみ。
-    `;
-
-    const result = await model.generateContent(expansionPrompt);
+    const result = await model.generateContent(`Create a detailed English prompt for Imagen 3: ${prompt}. Anime style.`);
     const expandedPrompt = result.response.text().trim();
 
-    // 2. Imagen 3 API へのリクエスト（最新のエンドポイント構造）
+    // 2. 画像生成リクエスト
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/imagen-3:predict?key=${API_KEY}`,
       {
@@ -32,44 +25,39 @@ export async function POST(req: Request) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           instances: [{ prompt: expandedPrompt }],
-          parameters: { 
-            sampleCount: 1,
-            aspectRatio: "1:1",
-            safetySetting: "BLOCK_ONLY_HIGH" // 表現の自由度を少し広げる設定
-          }
+          parameters: { sampleCount: 1 }
         }),
       }
     );
 
     const data = await response.json();
 
-    // 3. 【重要】エラーの原因を徹底的に特定するロジック
+    // 3. 【重要】ここを徹底ガード
     if (data.error) {
-      return NextResponse.json({ 
-        success: false, 
-        error: `Google APIエラー: ${data.error.message} (${data.error.code})` 
-      });
+      // Googleからの本当のエラーメッセージを画面に出します
+      const msg = data.error.message;
+      if (msg.includes("billing") || msg.includes("permission")) {
+        return NextResponse.json({ 
+          success: false, 
+          error: `【Google AI制限】${msg}。画像生成にはGoogle Cloudでの課金設定が必要なようです。` 
+        });
+      }
+      return NextResponse.json({ success: false, error: `Google APIエラー: ${msg}` });
     }
 
-    // 階層を一つずつ確認し、undefinedによるクラッシュを防ぐ
-    const base64Image = data?.predictions?.[0]?.bytesBase64Encoded;
+    // predictions がない場合に備えてオプショナルチェイニングを使用
+    const base64 = data?.predictions?.[0]?.bytesBase64Encoded;
 
-    if (base64Image) {
-      return NextResponse.json({
-        success: true,
-        imageUrl: `data:image/png;base64,${base64Image}`,
-      });
+    if (base64) {
+      return NextResponse.json({ success: true, imageUrl: `data:image/png;base64,${base64}` });
     } else {
-      // 成功レスポンスの中にデータがない場合
-      console.error("Unexpected Data Structure:", data);
       return NextResponse.json({ 
         success: false, 
-        error: "AIから画像が返されませんでした。プロンプトに制限対象の言葉が含まれている可能性があります。" 
+        error: "画像データが空でした。無課金枠の制限、またはセーフティフィルターの影響です。別のAPI（Stability AI等）を検討しましょう。" 
       });
     }
 
   } catch (error: any) {
-    console.error("Internal Server Error:", error);
-    return NextResponse.json({ success: false, error: `サーバーエラー: ${error.message}` }, { status: 500 });
+    return NextResponse.json({ success: false, error: `通信エラー: ${error.message}` }, { status: 500 });
   }
 }
