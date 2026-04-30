@@ -7,26 +7,31 @@ export async function POST(req: Request) {
     const API_KEY = process.env.GOOGLE_AI_API_KEY;
 
     if (!API_KEY) {
-      return NextResponse.json({ success: false, error: "APIキーが設定されていません。" }, { status: 500 });
+      console.error("DEBUG: API_KEY is missing in environment variables.");
+      return NextResponse.json({ success: false, error: "Vercelの環境変数にAPIキーが見つかりません。" }, { status: 500 });
     }
 
-    // 1. Gemini 2.0 Flashでエモい英文プロンプトを作成[cite: 1]
+    // 1. 最新の Gemini 3 Flash を使用して、Imagen用のプロンプトを最適化
     const genAI = new GoogleGenerativeAI(API_KEY);
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+    // 2026年5月時点の最新安定モデルを指定
+    const model = genAI.getGenerativeModel({ model: "gemini-3-flash" });
 
     const expansionPrompt = `
-      Input: ${prompt}
-      Task: Create a highly detailed English image generation prompt for Imagen 3.
-      Style: Nostalgic Japanese anime style, soft cinematic lighting, emotional atmosphere.
-      Output: Only the English prompt text.
+      以下の日本語の思い出を、Imagen 3で画像生成するための詳細な英文プロンプトに変換してください。
+      思い出：${prompt}
+      条件：1990年代の日本のアニメ映画風、エモい光、高解像度。
+      出力：プロンプトの英文のみを1件。
     `;
 
+    console.log("DEBUG: Sending request to Gemini 3 Flash...");
     const result = await model.generateContent(expansionPrompt);
     const expandedPrompt = result.response.text().trim();
+    console.log("DEBUG: Expanded Prompt:", expandedPrompt);
 
-    // 2. Imagen 3 APIを呼び出し
+    // 2. Imagen 3 API を呼び出す
+    console.log("DEBUG: Sending request to Imagen 3...");
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/imagen-3:predict?key=${API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1/models/imagen-3:predict?key=${API_KEY}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -40,20 +45,41 @@ export async function POST(req: Request) {
       }
     );
 
+    // レスポンスのJSONを一度取得
     const data = await response.json();
+    console.log("DEBUG: Raw API Response:", JSON.stringify(data));
 
-    // 3. データの存在を一段ずつ慎重に確認（これで '0' のエラーを防ぎます）
-    if (data && data.predictions && data.predictions[0] && data.predictions[0].bytesBase64Encoded) {
-      return NextResponse.json({
-        success: true,
-        imageUrl: `data:image/png;base64,${data.predictions[0].bytesBase64Encoded}`,
+    // 3. エラーハンドリングとデータの抽出
+    if (data.error) {
+      return NextResponse.json({ 
+        success: false, 
+        error: `Google APIエラー: ${data.error.message} (コード: ${data.error.code})` 
       });
-    } else {
-      // 失敗した理由を詳しく画面に返す
-      const errorMessage = data.error?.message || "画像データが返ってきませんでした。モデルの権限設定を確認してください。";
-      return NextResponse.json({ success: false, error: errorMessage });
     }
+
+    // データの階層を一つずつ安全に確認（ここで '0' のエラーを防ぎます）
+    const predictions = data?.predictions;
+    if (predictions && Array.isArray(predictions) && predictions.length > 0) {
+      const base64Image = predictions[0].bytesBase64Encoded;
+      if (base64Image) {
+        return NextResponse.json({
+          success: true,
+          imageUrl: `data:image/png;base64,${base64Image}`,
+        });
+      }
+    }
+
+    // 画像データがどこにもない場合
+    return NextResponse.json({ 
+      success: false, 
+      error: "APIは成功しましたが、画像データが含まれていませんでした。プロンプトの内容が制限（セーフティフィルター）に触れた可能性があります。" 
+    });
+
   } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+    console.error("DEBUG: Server Crash:", error);
+    return NextResponse.json({ 
+      success: false, 
+      error: `サーバー内部エラー: ${error.message}` 
+    }, { status: 500 });
   }
 }
